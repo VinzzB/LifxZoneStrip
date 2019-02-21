@@ -8,6 +8,6 @@ You can NOT add the LED strip to the Lifx Cloud. You can only control the LED st
 
 All Lifx packets that are necessary to operate normally are included in the library. Some packets are only configured for stability reasons. (eg stopping unnecessary broadcasts = stop phones battery drain)
 
-You can crate your own zones by defening the amount of LEDS for each zone. Keep in mind that the arduino ony has 2Kb of SRAM. You need 9bytes per zone! 1byte = Amount of Leds and 8 bytes for HSBK (colors).
+You can create zones by defening the amount of LEDS for each zone. Keep in mind that the arduino ony has 2Kb of SRAM. You need 9bytes per zone! 1byte = Amount of Leds and 8 bytes for HSBK (colors). if you want more than 255 leds in one or more zones then you need to change the array to an integer type. If you use an integer then 10Bytes are reserved per zone.
 
-This lib also supports The MOVE effect.
+This lib also supports The MOVE effect. This is currently the only effect available on Lifx Z / Beam.
