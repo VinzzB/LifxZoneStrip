@@ -1,7 +1,7 @@
 # LifxZoneStrip
 Use the Lifx app to control zones with self made LED strips. I'm using APA102 LED Driver strips. (other drivers are also possible)
 
-This library makes use of the APA102 Library written by myself. You can find the libaray over here: https://github.com/VinzzB/APA102_LedStreamer
+This library makes use of the APA102 Library written by myself. You can find the library over here: https://github.com/VinzzB/APA102_LedStreamer
 
 This project is a work in progress. 
 You can NOT add the LED strip to the Lifx Cloud. You can only control the LED strip from your home network.
