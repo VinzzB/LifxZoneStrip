@@ -47,7 +47,7 @@ EthernetUDP Udp;
 APA102_LedStreamer strip = APA102_LedStreamer(LEDS); 
 //allocate memory for zones.
 HSBK zones[zone_count];
-MultiZoneEffectPacket effect;
+//MultiZoneEffectPacket effect;
 bool zones_active = false;
 uint8_t location[LifxLocOrGroupSize];
 uint8_t group[LifxLocOrGroupSize];
@@ -62,9 +62,15 @@ uint8_t prev_pwr_seq; //sequence number from last power request.
 unsigned long prev_pwr_seq_action = 0; //last time power button was toggled
 uint16_t prev_pwr_seq_reset_interval = 5000; //follow client sequence nr for 5sec. accept all requests after that.
 //vars for effects. currently only 'move'.
-unsigned long last_move_effect;
-uint8_t last_move_idx; 
-void setup() {   
+unsigned long last_move_effect_time;
+uint32_t move_speed;
+uint8_t  move_direction;
+uint16_t move_start_led = 0;
+ 
+void setup() {
+   //SS for led strip (made with 2N3904 transistor)
+  pinMode(6, OUTPUT);
+
   SPI.setClockDivider(SPI_CLOCK_DIV2); //8Mhz SPI bus on UNO. Default is 4Mhz (SPI_CLOCK_DIV4) TODO: use SPI.beginTransaction in LedStreamer.
   Serial.begin(115200);
   while (!Serial) { ; /* wait for serial port to connect. Needed for native USB port only*/ }    
@@ -72,8 +78,6 @@ void setup() {
   // set up a UDP
   Udp.begin(LifxPort);
 
-  //SS for led strip (made with 2N3904 transistor)
-  pinMode(6, OUTPUT);
   //set up ethernet interrupt (hack for ws5100. Wire soldered on 'LNK' led and connected to digital pin 2).
   pinMode(NETWORK_INTERRUPT_PIN, INPUT_PULLUP);
   attachInterrupt(digitalPinToInterrupt(NETWORK_INTERRUPT_PIN), reInitNetwork, CHANGE);
@@ -98,21 +102,14 @@ void loop() {
   }
   
   //move colors left or right (MOVE Effect for Z strips and Beam)
-  if(effect.type == 1 && millis() - last_move_effect >= effect.speed ) {
-    last_move_effect = millis();
-    HSBK hold;
-    if(effect.parameters[1]) {
-      hold = zones[0];
-      memcpy(&zones,&zones[1], (zone_count-1)*8);
-      zones[zone_count-1] = hold;
-    } else {
-       hold = zones[zone_count-1];
-       for(byte x = zone_count-1; x > 0;x--) {
-          memcpy(&zones[x], &zones[x-1], 8);
-       }
-       zones[0] = hold;
-    }
-    setLight(); //we could call the singular functionName because this is a continous stream.
+  if(move_speed > 0 && power_status > 0 && millis() - last_move_effect_time >= (move_speed / LEDS )) {
+    last_move_effect_time = millis();
+
+    if(move_direction && move_start_led++ == LEDS - 1)
+      move_start_led = 0;
+    else if(!move_direction && move_start_led-- == 0)
+      move_start_led = LEDS - 1;
+    setLight(); //we call the singular functionName because this is a continous stream.  
   }
   
   // push the data into the LifxPacket structure
@@ -139,8 +136,6 @@ void reInitNetwork() {
 }
 
 void initNetwork() {
-  _reInitNetwork = false;
-
   digitalWrite (6, HIGH);
   // start the Ethernet connection:
   Serial.println(F("Initialize Ethernet with DHCP:"));
@@ -157,7 +152,7 @@ void initNetwork() {
   // print your local IP address:
   Serial.print(F("My IP address: "));
   Serial.println(Ethernet.localIP());
-  
+  _reInitNetwork = false;
 }
 
 void freeRam () {
@@ -174,28 +169,30 @@ void handleRequest(LifxPacket &request) {
   response.sequence = request.sequence;
 
   switch(request.type) {
-    case SET_POWER_STATE: 
+    case SET_POWER_STATE: {
       if(request.sequence >= prev_pwr_seq +1) {
         prev_pwr_seq = request.sequence;
         prev_pwr_seq_action = millis();      
         power_status = word(request.data[1], request.data[0]);
         setLights();
-      }    
-    case GET_POWER_STATE:
+      }  
+    }  
+    case GET_POWER_STATE:{
       writeUInt(response.data, 0, power_status);
       createUdpPacket(response, POWER_STATE, 2); 
       break;    
-      
-    case SET_LIGHT_STATE: //102 (0x66)
+    }
+    case SET_LIGHT_STATE: {//102 (0x66)
       for(i = 0; i < zone_count; i++) {
         memcpy(&zones[i], request.data + 1, 8); 
       }
       zones_active = false;
       setLights();    
+    }
     case GET_LIGHT_STATE: sendLightStateResponse(response); break;   
     
     case SET_WAVEFORM:
-    case SET_WAVEFORM_OPTIONAL: // 0x77:
+    case SET_WAVEFORM_OPTIONAL:{ // 0x77:
       WaveFormPacket dataPacket; //todo: we have other things in this packet! (waveform)
       memcpy(dataPacket.raw, request.data, 25);
       for(i = 0; i < zone_count; i++) {
@@ -211,15 +208,16 @@ void handleRequest(LifxPacket &request) {
       setLights();       
       sendLightStateResponse(response);
       break;
-    
-    case SET_COLOR_ZONES: 
+    }
+    case SET_COLOR_ZONES: {
   //    byte apply = request.data[15];  //seems to be buggy?     
       for(i = request.data[0]; i <= request.data[1]; i++) {
-        memcpy(&zones[i], request.data + 2,8);
+        memcpy(&zones[i], request.data + 2,8);         
       }
       zones_active = true;
-      setLights();    
-    case GET_COLOR_ZONES: 
+      setLights(); 
+    }   
+    case GET_COLOR_ZONES: {
       for(uint8_t x = 0; x < zone_count; x+=8) {
         response.data[0] = zone_count;
         response.data[1] = x; //first idx nr for each 8 zones send
@@ -231,31 +229,27 @@ void handleRequest(LifxPacket &request) {
         if(!zones_active) break;
       }
       break; 
-    case SET_MULTIZONE_EFFECT: {     
-      memcpy(&effect,request.data, request.data_size);
-      if(effect.type == 1) {
-        Serial.print("MOVE ON: speed: ");
-        Serial.print(effect.speed);
-       // Serial.print(" Duration: ");
-       // Serial.print(effect.duration);
-        Serial.print(" Direction: ");
-        Serial.println(effect.parameters[1]);
-        Serial.print("Speed2: ");
-        uint32_t test;
-        memcpy(&test,request.data + 7,4);
-        Serial.println(test);
-        Serial.print("Direction2: ");
-        Serial.println(request.data[31]);
-        Serial.print("Type effect2: ");
-        Serial.println(request.data[4]);
-      } else
-        Serial.println("MOVE OFF;");
     }
-    case GET_MULTIZONE_EFFECT:
-      memcpy(response.data,&effect,59);
+    case SET_MULTIZONE_EFFECT: {     
+      byte move_enable = request.data[4];
+      if(move_enable) {
+        move_direction = request.data[31]; //effect.parameters[1];
+        memcpy(&move_speed,request.data + 7,4);       
+      } else {
+        move_speed = 0;
+        move_start_led = 0;
+      }
+    }
+    case GET_MULTIZONE_EFFECT:{
+      for(i = 0; i < 60; i++) 
+        response.data[i] = NULL_BYTE;
+      
+      response.data[4] = move_speed > 0 ? 1 : 0;
+      memcpy(response.data + 7, move_speed, 4);
+      response.data[31] = move_direction;
       createUdpPacket(response, STATE_MULTIZONE_EFFECT, 59); 
       break;
-          
+    }
     case SET_LOCATION:  memcpy(location, request.data ,LifxLocOrGroupSize);    
     case GET_LOCATION:  createUdpPacket(response, STATE_LOCATION, location, LifxLocOrGroupSize); break;    
     case SET_GROUP:     memcpy(group, request.data ,LifxLocOrGroupSize);    
@@ -263,25 +257,28 @@ void handleRequest(LifxPacket &request) {
     case SET_BULB_LABEL:memcpy(bulbLabel, request.data, LifxBulbLabelLength);  
     case GET_BULB_LABEL:createUdpPacket(response, BULB_LABEL, bulbLabel, sizeof(bulbLabel)); break;
     case GET_MESH_FIRMWARE_STATE:     
-    case GET_WIFI_FIRMWARE_STATE: //0x12 
+    case GET_WIFI_FIRMWARE_STATE: {//0x12 
       createUdpPacket(response, 
                       request.type == GET_WIFI_FIRMWARE_STATE ? WIFI_FIRMWARE_STATE : MESH_FIRMWARE_STATE, 
                       FirmwareVersionData, 20);
-      break;          
-    case GET_VERSION_STATE: 
+      break;  
+    }        
+    case GET_VERSION_STATE: {
       // respond to get command
       writeUInt(response.data,0,LifxBulbVendor);  writeUInt(response.data,2,NULL_BYTE);
       writeUInt(response.data,4,LifxBulbProduct); writeUInt(response.data,6,NULL_BYTE);
       writeUInt(response.data,8,LifxBulbVersion); writeUInt(response.data,10,NULL_BYTE);
       createUdpPacket(response, VERSION_STATE, 12);
       break;
-    case GET_PAN_GATEWAY: 
+    }
+    case GET_PAN_GATEWAY: {
       response.data[0] = SERVICE_UDP;
       writeUInt(response.data,1,LifxPort);
       writeUInt(response.data,3,NULL_BYTE);
       createUdpPacket(response, PAN_GATEWAY, 5);    
       break;
-    case GET_WIFI_INFO:
+    }
+    case GET_WIFI_INFO:{
       //write float signal (4bytes)
       writeUInt(response.data,0,0x3F7D); //0.99
       writeUInt(response.data,2,0x70A4); //0.99
@@ -293,24 +290,26 @@ void handleRequest(LifxPacket &request) {
       writeUInt(response.data,12,20);    
       createUdpPacket(response, STATE_WIFI_INFO, 14);
       break;   
-    case 54: //0x36
+    }
+    case 54: {//0x36
       //Unknown packet type. It has something to do with the Lifx cloud.Client asks bulb if it is attached to the cloud or not?
       //Responding with packet type 56 and 16 bytes as data stops the broadcast madness...
       for(i=0;i<16;i++)
         response.data[i] = 0;      
       createUdpPacket(response, 56, 16);
-      printLifxPacket(request);
+   //   printLifxPacket(request);
       break;
-    case 701: 
+    }
+    case 701: {
       //Responding with an empty 702 packet keeps the client happy.
       createUdpPacket(response, 702, 0);
       break;
-      
+    } 
 /*************
   DEBUG
 **************/      
 
-    default: 
+    default: {
       if(request.target[0] == mac[0] || request.target[0] == 0) {
         Serial.print(F("-> Unknown packet type, ignoring 0x"));
         Serial.print(request.type, HEX);
@@ -319,6 +318,7 @@ void handleRequest(LifxPacket &request) {
         Serial.println(")");
       }
       break;
+    }
   }
 }
 
@@ -389,8 +389,23 @@ void setLight() {
   digitalWrite (6, HIGH);
   if(power_status) {
     strip.startFrame();
-    for(uint8_t zoneIdx = 0; zoneIdx < zone_count; zoneIdx++) {
-      HSBK color = zones[zoneIdx];
+    byte currentZoneIdx = 0;
+    uint16_t countLeds = led_zones[0];
+    for(countLeds; countLeds < move_start_led; countLeds += led_zones[++currentZoneIdx]) {/*EMPTY*/}
+    for(uint8_t zoneIdx = currentZoneIdx; zoneIdx < zone_count; zoneIdx++) {
+       writeToStrip(zones[zoneIdx], zoneIdx == currentZoneIdx ? countLeds - move_start_led : led_zones[zoneIdx]);
+    }
+    for(uint8_t zoneIdx = 0; zoneIdx <= currentZoneIdx; zoneIdx++) {
+      writeToStrip(zones[zoneIdx], zoneIdx == currentZoneIdx ? led_zones[currentZoneIdx] - (countLeds-move_start_led) : led_zones[zoneIdx]);
+    }
+  } else {   
+    strip.setLeds(0,0,0,0,false);   
+  }
+  digitalWrite (6, LOW);
+  digitalWrite (10, HIGH);
+}
+
+void writeToStrip(HSBK color, uint16_t leds_count) {
       uint16_t this_hue = map(color.hue, 0, 65535, 0, 360);
       uint8_t this_sat = map(color.sat, 0, 65535, 0, 255);
       uint8_t this_bri = map(color.bri, 0, 65535, 0, 255);
@@ -406,13 +421,7 @@ void setLight() {
       }
       uint8_t rgb[] ={0,0,0};
       hsb2rgb(this_hue, this_sat, this_bri, rgb);     
-      strip.setNextLeds(rgb[0],rgb[1],rgb[2], constrain(color.bri,0,31), led_zones[zoneIdx]);
-    }
-  } else {   
-    strip.setLeds(0,0,0,0,false);   
-  }
-  digitalWrite (6, LOW);
-  digitalWrite (10, HIGH);
+      strip.setNextLeds(rgb[0],rgb[1],rgb[2], constrain(color.bri,0,31), leds_count);
 }
 
 /*

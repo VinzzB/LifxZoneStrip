@@ -66,16 +66,16 @@ union WaveFormPacket {
   };
 };
 
-struct MultiZoneEffectPacket {
-    uint32_t intanceId;
-    uint8_t type;
-    uint16_t reserved1;
-    uint32_t speed;
-    uint64_t duration;
-    uint32_t reserved2;
-    uint32_t reserved3;
-    uint32_t parameters[8] ;
-};
+//struct MultiZoneEffectPacket {
+//    uint32_t intanceId;
+//    uint8_t type;
+//    uint16_t reserved1;
+//    uint32_t speed;
+//    uint64_t duration;
+//    uint32_t reserved2;
+//    uint32_t reserved3;
+//    uint32_t parameters[8] ;
+//};
 
 const uint16_t LifxPort            = 56700;  // local port to listen on
 const uint8_t  LifxBulbLabelLength = 32;
