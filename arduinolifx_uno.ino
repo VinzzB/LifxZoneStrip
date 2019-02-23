@@ -10,7 +10,31 @@ Requirements:
 - one 10k resistor
 
 ----------------------------------------------------------------------------------------
+SCHEMATICS (Copy/paste to notepad if lines not match)
+----------------------------------------------------------------------------------------
 
+                ┌──────┐
+             RST│01  28│A5
+              D0│02  27│A4
+              D1│03  26│A3
+  ETH_INT ─── D2│04  25│A2
+              D3│05  24│A1
+              D4│06  23│A0
+             VCC│07  22│GND
+             GND│08  21│aref
+            XTAL│09  20│VCC
+            XTAL│10  19│D13 ── SCK ────> ETHERNET ────────┐
+              D5│11  18│D12 ── MISO ───> ETHERNET         │
+          ┌── D6│12  17│D11 ── MOSI ───> ETHERNET / LED   │
+          │   D7│13  16│D10 ── SS_ETH ─> ETHERNET         │
+          │   D8│14  15│D9                 ┌──────────────┘
+          │     └──────┘                   E
+          └────────10k─────────SS_LED──> B ► (2N3904 NPN)
+                                           C
+                                           │
+                                       SCK_LED
+
+ETH_INT = Ethernet interrupt (optional)
 
 */
 // TODO: 
@@ -29,15 +53,17 @@ Requirements:
 //CONFIG 
 //-------------------
 //Set the amount of leds on the strip 
-#define LEDS 300
-#define NETWORK_INTERRUPT_PIN 2 //wire soldered onto ethernet ws5100 LNK led.
+#define LEDS 300 //0-65535
+#define SS_ETHERNET 10
+#define SS_LED_STRIP 6
+#define NETWORK_INTERRUPT_PIN 2 //wire soldered onto ethernet ws5100 LNK led.(optional)
 //#define DEBUG 1
 const uint8_t mac[] = { 0x00, 0xAA, 0xBB, 0xCC, 0xDE, 0x02 };
 // setup zones
-const uint8_t zone_count = 16; //only powers of 8! max 80 zones (by doc) 
+const uint8_t zone_count = 16; //only powers of 8! max 80 zones (by doc). each zone will hold 9bytes in SRam! (1byte for led_zones and 8 bytes for HSBK)
 //Define the amount of leds per zone.
-//use byte array if every zone has less than 255 leds. use an unsigned integer array for more (>255) leds per zone.
-const uint8_t led_zones[] = { 18, 19, 18, 20, 18, 19, 18, 20, 18 ,19, 18, 20, 18, 19, 18, 20}; //each zone will hold 8bytes in SRam!
+//use byte array if every zone has less than 255 leds (=9bytes/zone). Use an unsigned integer array for more (>255) leds per zone (=10bytes per zone).
+const uint8_t led_zones[] = { 18, 19, 18, 20, 18, 19, 18, 20, 18 ,19, 18, 20, 18, 19, 18, 20}; 
 char bulbLabel[LifxBulbLabelLength] = "Arduino LED Strip";
 
 //-------------------
@@ -69,7 +95,7 @@ uint16_t move_start_led = 0;
  
 void setup() {
    //SS for led strip (made with 2N3904 transistor)
-  pinMode(6, OUTPUT);
+  pinMode(SS_LED_STRIP, OUTPUT);
 
   SPI.setClockDivider(SPI_CLOCK_DIV2); //8Mhz SPI bus on UNO. Default is 4Mhz (SPI_CLOCK_DIV4) TODO: use SPI.beginTransaction in LedStreamer.
   Serial.begin(115200);
@@ -96,9 +122,9 @@ void loop() {
     return;
   }  
   
-  //reset power sequence to avoid led from flashing.  
+  //reset power sequence. This avoids the leds from flashing.  
   if(prev_pwr_seq > 0 && millis() - prev_pwr_seq_action >= prev_pwr_seq_reset_interval) {
-    prev_pwr_seq = 0x0;
+    prev_pwr_seq = NULL_BYTE;
   }
   
   //move colors left or right (MOVE Effect for Z strips and Beam)
@@ -114,7 +140,7 @@ void loop() {
   
   // push the data into the LifxPacket structure
   LifxPacket request;
-  // if there's UDP data available, read a packet. (256 bytes max)
+  // if there's UDP data available, read a packet. (128 bytes max, defined in lifx.h > LifxPacket.data)
   uint8_t packetSize = Udp.parsePacket();
   if(packetSize) {
     Udp.read(request.raw, packetSize);
@@ -136,7 +162,7 @@ void reInitNetwork() {
 }
 
 void initNetwork() {
-  digitalWrite (6, HIGH);
+  digitalWrite (SS_LED_STRIP, HIGH);
   // start the Ethernet connection:
   Serial.println(F("Initialize Ethernet with DHCP:"));
   while (Ethernet.begin(mac) == 0) {
@@ -282,10 +308,8 @@ void handleRequest(LifxPacket &request) {
       //write float signal (4bytes)
       writeUInt(response.data,0,0x3F7D); //0.99
       writeUInt(response.data,2,0x70A4); //0.99
-      //write int tx  (4bytes)
-      //write int rx (4bytes)
       for(i=4; i < 12;i++)
-        response.data[i] = 0x00;      
+        response.data[i] = NULL_BYTE;      
       //write short mcu_temp (2bytes)
       writeUInt(response.data,12,20);    
       createUdpPacket(response, STATE_WIFI_INFO, 14);
@@ -295,9 +319,8 @@ void handleRequest(LifxPacket &request) {
       //Unknown packet type. It has something to do with the Lifx cloud.Client asks bulb if it is attached to the cloud or not?
       //Responding with packet type 56 and 16 bytes as data stops the broadcast madness...
       for(i=0;i<16;i++)
-        response.data[i] = 0;      
+        response.data[i] = NULL_BYTE;      
       createUdpPacket(response, 56, 16);
-   //   printLifxPacket(request);
       break;
     }
     case 701: {
@@ -333,7 +356,7 @@ void sendLightStateResponse(LifxPacket &response) {
   }
   //tags (reserved)
   for(i = 0; i < 8; i++) {
-    response.data[44+i] = 0x00;
+    response.data[44+i] = NULL_BYTE;
   }  
   createUdpPacket(response, LIGHT_STATUS, 52);
 }
@@ -352,10 +375,10 @@ void createUdpPacket(LifxPacket &response, uint16_t packet_type, uint8_t data_si
   response.res_required = response.ack_required = false;         
   response.type =  packet_type;
   response.protocol = 1024;
-  response.reserved2 = 0x0;
+  response.reserved2 = NULL_BYTE;
   response.addressable = true;  
   memcpy(response.target, mac, 6);
-  response.target[7] = response.target[6] = 0x0;
+  response.target[7] = response.target[6] = NULL_BYTE;
   memcpy(response.reserved1, site_mac, 6); 
   response.data_size = data_size;
   response.size = response.data_size + LifxPacketSize;
@@ -385,24 +408,27 @@ void setLights() {
 }
 
 void setLight() {
-  digitalWrite (10, LOW);
-  digitalWrite (6, HIGH);
+  selectSpiLedStrip(true);
   if(power_status) {
-    strip.startFrame();
     byte currentZoneIdx = 0;
-    uint16_t countLeds = led_zones[0];
-    for(countLeds; countLeds < move_start_led; countLeds += led_zones[++currentZoneIdx]) {/*EMPTY*/}
+    uint16_t startZoneLed = led_zones[0];
+    for(startZoneLed; startZoneLed < move_start_led; startZoneLed += led_zones[++currentZoneIdx]) {/*EMPTY*/}
+    startZoneLed -=  move_start_led;
     for(uint8_t zoneIdx = currentZoneIdx; zoneIdx < zone_count; zoneIdx++) {
-       writeToStrip(zones[zoneIdx], zoneIdx == currentZoneIdx ? countLeds - move_start_led : led_zones[zoneIdx]);
+      writeToStrip(zones[zoneIdx], zoneIdx == currentZoneIdx ? startZoneLed : led_zones[zoneIdx]);
     }
     for(uint8_t zoneIdx = 0; zoneIdx <= currentZoneIdx; zoneIdx++) {
-      writeToStrip(zones[zoneIdx], zoneIdx == currentZoneIdx ? led_zones[currentZoneIdx] - (countLeds-move_start_led) : led_zones[zoneIdx]);
+      writeToStrip(zones[zoneIdx], led_zones[zoneIdx] - (zoneIdx == currentZoneIdx ? startZoneLed : 0));
     }
   } else {   
     strip.setLeds(0,0,0,0,false);   
   }
-  digitalWrite (6, LOW);
-  digitalWrite (10, HIGH);
+  selectSpiLedStrip(false);
+}
+
+void selectSpiLedStrip(byte enable) {
+  digitalWrite (SS_ETHERNET, !enable);
+  digitalWrite (SS_LED_STRIP, enable);
 }
 
 void writeToStrip(HSBK color, uint16_t leds_count) {
