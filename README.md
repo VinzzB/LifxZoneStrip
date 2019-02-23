@@ -44,3 +44,10 @@ SCHEMATICS
                                        SCK_LED
 ETH_INT = Ethernet interrupt (optional)
 ```
+----------------------------------------------------------------------------------------
+VIDEO
+----------------------------------------------------------------------------------------
+
+<a href="http://www.youtube.com/watch?feature=player_embedded&v=BSZx7j49QeA
+" target="_blank"><img src="http://img.youtube.com/vi/BSZx7j49QeA/0.jpg" 
+alt="" width="440" height="280" border="10" /></a>
