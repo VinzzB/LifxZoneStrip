@@ -55,7 +55,8 @@ ETH_INT = Ethernet interrupt (optional)
 //Set the amount of leds on the strip 
 #define LEDS 300 //0-65535
 #define SS_ETHERNET 10
-#define SS_LED_STRIP 6
+#define RST_ETHERNET 9
+#define SS_LED_STRIP 3
 #define NETWORK_INTERRUPT_PIN 2 //wire soldered onto ethernet ws5100 LNK led.(optional)
 //#define DEBUG 1
 const uint8_t mac[] = { 0x00, 0xAA, 0xBB, 0xCC, 0xDE, 0x02 };
@@ -96,17 +97,18 @@ uint16_t move_start_led = 0;
 void setup() {
    //SS for led strip (made with 2N3904 transistor)
   pinMode(SS_LED_STRIP, OUTPUT);
-
+  pinMode(RST_ETHERNET, OUTPUT);
+  digitalWrite (RST_ETHERNET, LOW);
+  //set up ethernet interrupt (hack for ws5100. Wire soldered on 'LNK' led and connected to digital pin 2).
+  pinMode(NETWORK_INTERRUPT_PIN, INPUT_PULLUP);
+  attachInterrupt(digitalPinToInterrupt(NETWORK_INTERRUPT_PIN), reInitNetwork, CHANGE);
+    
   SPI.setClockDivider(SPI_CLOCK_DIV2); //8Mhz SPI bus on UNO. Default is 4Mhz (SPI_CLOCK_DIV4) TODO: use SPI.beginTransaction in LedStreamer.
   Serial.begin(115200);
   while (!Serial) { ; /* wait for serial port to connect. Needed for native USB port only*/ }    
   initNetwork();
   // set up a UDP
   Udp.begin(LifxPort);
-
-  //set up ethernet interrupt (hack for ws5100. Wire soldered on 'LNK' led and connected to digital pin 2).
-  pinMode(NETWORK_INTERRUPT_PIN, INPUT_PULLUP);
-  attachInterrupt(digitalPinToInterrupt(NETWORK_INTERRUPT_PIN), reInitNetwork, CHANGE);
   //initial light setup.
   setLight();
   //check free ram on device.
@@ -163,6 +165,9 @@ void reInitNetwork() {
 
 void initNetwork() {
   digitalWrite (SS_LED_STRIP, HIGH);
+  digitalWrite (RST_ETHERNET, LOW);
+  delay(50);
+  digitalWrite (RST_ETHERNET, HIGH);
   // start the Ethernet connection:
   Serial.println(F("Initialize Ethernet with DHCP:"));
   while (Ethernet.begin(mac) == 0) {
@@ -170,8 +175,10 @@ void initNetwork() {
     if (Ethernet.hardwareStatus() == EthernetNoHardware) {     
       Serial.println(F("Ethernet shield was not found.  Sorry, can't run without hardware. :("));
       // no point in carrying on, so do nothing forevermore:
-      while (true) { delay(1); }
-    } else if (Ethernet.linkStatus() == LinkOFF) {
+      //while (true) { delay(1); }
+      delay(1000);
+      continue;
+    } else if(Ethernet.linkStatus() == LinkOFF) {
       Serial.println(F("Ethernet cable is not connected."));
     } 
   }
@@ -226,8 +233,8 @@ void handleRequest(LifxPacket &request) {
           zones[i].hue = dataPacket.color.hue;
         if(dataPacket.set_saturation || request.type == SET_WAVEFORM)
           zones[i].sat = dataPacket.color.sat; 
-        if(dataPacket.set_brightness || request.type == SET_WAVEFORM)
-          zones[i].bri = dataPacket.color.bri; 
+        if((dataPacket.set_brightness && zones[i].bri > 0) || request.type == SET_WAVEFORM)
+          zones[i].bri = dataPacket.color.bri;                                                                                                                     
         if(dataPacket.set_kelvin || request.type == SET_WAVEFORM)
           zones[i].kel = dataPacket.color.kel; 
       }
