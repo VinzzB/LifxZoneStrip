@@ -58,7 +58,7 @@ ETH_INT = Ethernet interrupt (optional)
 #define RST_ETHERNET 9
 #define SS_LED_STRIP 3
 #define NETWORK_INTERRUPT_PIN 2 //wire soldered onto ethernet ws5100 LNK led.(optional)
-//#define DEBUG 1
+#define DEBUG 1
 const uint8_t mac[] = { 0x00, 0xAA, 0xBB, 0xCC, 0xDE, 0x02 };
 // setup zones
 const uint8_t zone_count = 16; //only powers of 8! max 80 zones (by doc). each zone will hold 9bytes in SRam! (1byte for led_zones and 8 bytes for HSBK)
@@ -75,7 +75,7 @@ APA102_LedStreamer strip = APA102_LedStreamer(LEDS);
 //allocate memory for zones.
 HSBK zones[zone_count];
 //MultiZoneEffectPacket effect;
-bool zones_active = false;
+//bool zones_active = false;
 uint8_t location[LifxLocOrGroupSize];
 uint8_t group[LifxLocOrGroupSize];
 uint16_t power_status = 0; //0 | 65535
@@ -144,7 +144,7 @@ void loop() {
   LifxPacket request;
   // if there's UDP data available, read a packet. (128 bytes max, defined in lifx.h > LifxPacket.data)
   uint8_t packetSize = Udp.parsePacket();
-  if(packetSize) {
+  if(packetSize > 0 && packetSize <= 128) {
     Udp.read(request.raw, packetSize);
     request.data_size = packetSize - LifxPacketSize; 
     #ifdef DEBUG
@@ -219,7 +219,7 @@ void handleRequest(LifxPacket &request) {
       for(i = 0; i < zone_count; i++) {
         memcpy(&zones[i], request.data + 1, 8); 
       }
-      zones_active = false;
+    //  zones_active = false;
       setLights();    
     }
     case GET_LIGHT_STATE: sendLightStateResponse(response); break;   
@@ -247,8 +247,9 @@ void handleRequest(LifxPacket &request) {
       for(i = request.data[0]; i <= request.data[1]; i++) {
         memcpy(&zones[i], request.data + 2,8);         
       }
-      zones_active = true;
-      setLights(); 
+     // zones_active = true;
+      setLights();
+      break; 
     }   
     case GET_COLOR_ZONES: {
       for(uint8_t x = 0; x < zone_count; x+=8) {
@@ -256,10 +257,11 @@ void handleRequest(LifxPacket &request) {
         response.data[1] = x; //first idx nr for each 8 zones send
         for(i = 0; i < 8; i++) { // i = zoneIdx
          memcpy(response.data + 2+(i*8),&zones[x+i],8);
-         if(!zones_active) break;
+         //if(!zones_active) break;
         }
-        createUdpPacket(response, zones_active ? STATE_MULTI_ZONE : STATE_ZONE, zones_active ? 66 : 10);
-        if(!zones_active) break;
+        //createUdpPacket(response, zones_active ? STATE_MULTI_ZONE : STATE_ZONE, zones_active ? 66 : 10);
+        createUdpPacket(response, STATE_MULTI_ZONE, 66 );
+        //if(!zones_active) break;
       }
       break; 
     }
@@ -478,27 +480,27 @@ void hsb2rgb(uint16_t hue, uint8_t sat, uint8_t val, uint8_t rgb[]) {
 
 void printLifxPacket(LifxPacket &request) {
     uint8_t i = 0;
-    Serial.print(F("LFX2: "));
+    Serial.print(F("LFX2: Size:"));
     Serial.print(request.size);
     
-    Serial.print(F(" | Proto: "));
-    Serial.print(request.protocol);
+//    Serial.print(F(" | Proto: "));
+//    Serial.print(request.protocol);
 
-    Serial.print(F(" (0x"));
-    Serial.print(request.raw[2], HEX);
-    Serial.print(F(" "));
-    Serial.print(request.raw[3], HEX);
-    Serial.print(F(" "));
+//    Serial.print(F(" (0x"));
+//    Serial.print(request.raw[2], HEX);
+//    Serial.print(F(" "));
+//    Serial.print(request.raw[3], HEX);
+//    Serial.print(F(" "));
     //Serial.print(F(")"));
     
-    Serial.print(F(") | addressable: "));
-    Serial.print(request.addressable);
-    
-    Serial.print(F(" | tagged: "));
-    Serial.print(request.tagged);
-
-    Serial.print(F(" | origin: "));
-    Serial.print(request.origin);
+//    Serial.print(F(") | addressable: "));
+//    Serial.print(request.addressable);
+//    
+//    Serial.print(F(" | tagged: "));
+//    Serial.print(request.tagged);
+//
+//    Serial.print(F(" | origin: "));
+//    Serial.print(request.origin);
 
     Serial.print(F(" | source: 0x"));
     Serial.print(request.source, HEX);
@@ -509,11 +511,11 @@ void printLifxPacket(LifxPacket &request) {
       Serial.print(F(" "));
     }
     
-    Serial.print(F(" | reserved1: 0x"));
-    for(i = 0; i < 6; i++) {
-      Serial.print(request.reserved1[i], HEX);
-      Serial.print(F(" "));
-    }
+//    Serial.print(F(" | reserved1: 0x"));
+//    for(i = 0; i < 6; i++) {
+//      Serial.print(request.reserved1[i], HEX);
+//      Serial.print(F(" "));
+//    }
     
     Serial.print(F(" | res_required:"));
     Serial.print(request.res_required);
@@ -521,8 +523,8 @@ void printLifxPacket(LifxPacket &request) {
     Serial.print(F(" | ack_required:"));
     Serial.print(request.ack_required);
 
-    Serial.print(F(" | reserved2: 0x"));
-    Serial.print(request.reserved2, HEX);
+//    Serial.print(F(" | reserved2: 0x"));
+//    Serial.print(request.reserved2, HEX);
 
     Serial.print(F(" | sequence: 0x"));
     Serial.print(request.sequence, HEX);
@@ -536,8 +538,8 @@ void printLifxPacket(LifxPacket &request) {
     Serial.print(request.type);
     Serial.print(")"); 
      
-    Serial.print(F(" | reserved4: 0x"));
-    Serial.print(request.reserved4, HEX);
+//    Serial.print(F(" | reserved4: 0x"));
+//    Serial.print(request.reserved4, HEX);
 
     Serial.print(F(" | data: "));
     for(i = 0; i < request.data_size; i++) {
@@ -545,7 +547,7 @@ void printLifxPacket(LifxPacket &request) {
       Serial.print(F(" "));
     }    
         
-    Serial.print(F(" | data_size:"));
-    Serial.print(request.data_size);
+//    Serial.print(F(" | data_size:"));
+//    Serial.print(request.data_size);
     Serial.println();  
 }
