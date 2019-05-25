@@ -11,6 +11,7 @@
 
 
 const uint8_t LifxPacketSize      = 36;
+const uint8_t LifxMaximumPacketSize = 128;
 
 union LifxPacket {
   uint8_t raw[];
@@ -34,7 +35,7 @@ union LifxPacket {
     uint16_t type;          //2 bytes | 34 bytes
     uint16_t reserved4;     //2 bytes | 36 bytes
     /* DATA */
-    byte data[128-LifxPacketSize]; // * leftover bytes
+    byte data[LifxMaximumPacketSize-LifxPacketSize]; // * leftover bytes
     byte data_size;    
   };
 };

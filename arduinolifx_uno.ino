@@ -144,7 +144,7 @@ void loop() {
   LifxPacket request;
   // if there's UDP data available, read a packet. (128 bytes max, defined in lifx.h > LifxPacket.data)
   uint8_t packetSize = Udp.parsePacket();
-  if(packetSize > 0 && packetSize <= 128) {
+  if(packetSize >= LifxPacketSize && packetSize <= LifxMaximumPacketSize) {
     Udp.read(request.raw, packetSize);
     request.data_size = packetSize - LifxPacketSize; 
     #ifdef DEBUG
@@ -152,8 +152,8 @@ void loop() {
       printLifxPacket(request);
     #endif
     //read and respond to the request
-     handleRequest(request);    
-   }  
+    handleRequest(request);
+  }
   Ethernet.maintain();
 }
 
@@ -402,7 +402,6 @@ void sendUDPPacket(LifxPacket &pkt) {
   #ifdef DEBUG
     Serial.print(F("OUT "));
     printLifxPacket(pkt);
-    Serial.println();
   #endif
 
   Udp.beginPacket(broadcast_addr, Udp.remotePort());
