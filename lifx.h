@@ -80,15 +80,16 @@ union WaveFormPacket {
 
 const uint16_t LifxPort            = 56700;  // local port to listen on
 const uint8_t  LifxBulbLabelLength = 32;
-const uint8_t  LifxBulbTagsLength  = 8;
-const uint8_t  LifxLocOrGroupSize  = 56;
+//const uint8_t  LifxBulbTagsLength  = 8;
+const uint8_t  LifxLocOrGroupSize  = 48; // 56;
 
 // firmware versions, etc
+//https://github.com/LIFX/products/blob/master/products.json
 const uint16_t LifxBulbVendor = 1;
-const uint16_t LifxBulbProduct = 32; //32 = Lifx Z
+const uint16_t LifxBulbProduct = 32; //31 and 32 are both Lifx Z
 const uint16_t LifxBulbVersion = 1;
 const uint16_t LifxFirmwareVersionMajor = 2;
-const uint16_t LifxFirmwareVersionMinor = 1;
+const uint16_t LifxFirmwareVersionMinor = 76;  //smaller than 77 = version 1 | higher or equal to 77 = version 2.
 uint8_t FirmwareVersionData[] = { 
   0x44, 0x65, 0x73, 0x69, 0x67, 0x6e, 0x20, 0x62, //build timestamp
   0x79, 0x20, 0x56, 0x69, 0x6e, 0x7a, 0x7a, 0x42, //install timestamp
@@ -99,7 +100,7 @@ uint8_t FirmwareVersionData[] = {
 //messages: https://github.com/magicmonkey/lifxjs/blob/master/Protocol.md
 const uint8_t NULL_BYTE = 0x0;
 const uint8_t SERVICE_UDP = 0x01;
-const uint8_t SERVICE_TCP = 0x02;
+//const uint8_t SERVICE_TCP = 0x02;
 
 // packet types
 const uint8_t GET_PAN_GATEWAY = 0x02;          //REQ 2 GetService 
@@ -117,10 +118,12 @@ const uint8_t STATE_WIFI_INFO = 0x11;        //RSP 17
 const uint8_t GET_WIFI_FIRMWARE_STATE = 0x12;  //REQ 18 GetWifiFirmware 
 const uint8_t WIFI_FIRMWARE_STATE = 0x13;		  //RSP 19 StateWifiFirmware 
 
-const uint8_t GET_POWER_STATE = 0x14;	        //REQ 20  GetPower 
+//const uint8_t GET_POWER_STATE = 0x14;	        //REQ 20  GetPower 
 //const uint8_t SET_POWER = 0x15               //REQ 21  SetPower 
-const uint8_t SET_POWER_STATE = 0x75;	        //REQ 117 (????????????????????????????????????????)
-const uint8_t POWER_STATE = 0x16; 			        //RSP 22  StatePower 
+const uint8_t GET_POWER_STATE = 0x74;          //REQ 116  GetPower 
+const uint8_t SET_POWER_STATE = 0x75;	        //REQ 117 SetPower 
+const uint8_t POWER_STATE = 0x76;               //RSP 118  StatePower 
+//const uint8_t POWER_STATE = 0x16; 			        //RSP 22  StatePower 
 
 const uint8_t GET_BULB_LABEL = 0x17; 		      //REQ 23 GetLabel 
 const uint8_t SET_BULB_LABEL = 0x18; 		      //REQ 24 SetLabel 
@@ -168,7 +171,13 @@ const uint16_t STATE_MULTI_ZONE = 506;           //RSP
 
 const uint16_t GET_MULTIZONE_EFFECT = 507;       //REQ 0x1FB
 const uint16_t SET_MULTIZONE_EFFECT = 508;       //REQ 0x1FC
-const uint16_t STATE_MULTIZONE_EFFECT = 509;     //REQ 0x1FD
+const uint16_t STATE_MULTIZONE_EFFECT = 509;     //RSP 0x1FD
+
+//multi-zone messages (extended multizone >=v2.77)
+
+//const uint16_t SET_EXTENDED_COLOR_ZONES = 510;
+//const uint16_t GET_EXTENDED_COLOR_ZONES = 511;
+//const uint16_t STATE_EXTENDED_COLOR_ZONES = 512;
 
 //TILE MESSAGES
 //

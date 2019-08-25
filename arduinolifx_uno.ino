@@ -20,7 +20,7 @@ SCHEMATICS (Copy/paste to notepad if lines not match)
   ETH_INT ─── D2│04  25│A2
               D3│05  24│A1
               D4│06  23│A0
-             VCC│07  22│GND
+             VCC│07  22│GND  ──── GND_LED  
              GND│08  21│aref
             XTAL│09  20│VCC
             XTAL│10  19│D13 ── SCK ────> ETHERNET ────────┐
@@ -38,80 +38,103 @@ ETH_INT = Ethernet interrupt (optional)
 
 */
 // TODO: 
-// - EEPROM Label, group & location (if an EEPROM is available)
-// - Waveforms, skew ratio, cycles, periods, transient effects.
+// - Waveforms, skew ratio, cycles, periods, transient effects. (see: https://github.com/tigoe/ArduinoLifx)
 // - use SPI.beginTransaction in APA102_LedStreamer. (currently using the clockDivider option.)
 
+/*-------------------
+//LOAD OR INCLUDE FUNCTIONALITY
+//------------------- */
+//#define USE_NETWORK_INTERRUPT_HACK //uncomment this line if have a ws5100 network chip with a wire hack.
+#define USE_EEPROM //uncomment this line if you are using an arduino with EEPROM support and you want to save the Label, location and group in non volatile memory.
+#define DEBUG
 
 #include <SPI.h>
 #include <Ethernet.h>
 #include <APA102_LedStreamer.h>
 #include "lifx.h"
 #include "color.h"
+#ifdef USE_EEPROM
+  #include <EEPROM.h>
+#endif
 
-//-------------------
-//CONFIG 
-//-------------------
+/*-------------------
+// CONFIG  (replace settings if needed)
+//------------------- */
+
 //Set the amount of leds on the strip 
 #define LEDS 300 //0-65535
 #define SS_ETHERNET 10
 #define RST_ETHERNET 9
 #define SS_LED_STRIP 3
-#define NETWORK_INTERRUPT_PIN 2 //wire soldered onto ethernet ws5100 LNK led.(optional)
-#define DEBUG 1
+#ifdef USE_NETWORK_INTERRUPT_HACK
+  #define NETWORK_INTERRUPT_PIN 2 //wire soldered onto ethernet ws5100 LNK led.(optional)
+#endif
 const uint8_t mac[] = { 0x00, 0xAA, 0xBB, 0xCC, 0xDE, 0x02 };
 // setup zones
 const uint8_t zone_count = 16; //only powers of 8! max 80 zones (by doc). each zone will hold 9bytes in SRam! (1byte for led_zones and 8 bytes for HSBK)
 //Define the amount of leds per zone.
 //use byte array if every zone has less than 255 leds (=9bytes/zone). Use an unsigned integer array for more (>255) leds per zone (=10bytes per zone).
 const uint8_t led_zones[] = { 18, 19, 18, 20, 18, 19, 18, 20, 18 ,19, 18, 20, 18, 19, 18, 20}; 
-char bulbLabel[LifxBulbLabelLength] = "Arduino LED Strip";
 
-//-------------------
-//GLOBAL VARS
-//-------------------
+/*-------------------
+// GLOBAL VARS  (do not change, unless you know what you're doing!)
+//------------------- */
 EthernetUDP Udp;
 APA102_LedStreamer strip = APA102_LedStreamer(LEDS); 
 //allocate memory for zones.
 HSBK zones[zone_count];
-//MultiZoneEffectPacket effect;
-//bool zones_active = false;
-uint8_t location[LifxLocOrGroupSize];
-uint8_t group[LifxLocOrGroupSize];
+//MultiZoneEffectPacket effect; //(todo Led strip >= v2.77)
 uint16_t power_status = 0; //0 | 65535
-volatile bool _reInitNetwork = true; //flag set by interrupt when ethernet connection is lost or reconnected.
+#ifdef USE_NETWORK_INTERRUPT_HACK
+  volatile bool _reInitNetwork = true; //flag set by interrupt when ethernet connection is lost or reconnected.
+#endif
 uint8_t site_mac[] = { 0x4c, 0x49, 0x46, 0x58, 0x56, 0x32 }; // spells out "LIFXV2" - version 2 of the app changes the site address to this...
-
 //keep track of power requests from clients. This will avoid flicker when you press the power button multiple times 
 //over a short period of time. Power requests are send multiple times by the Lifx app.
 //Not a perfect solution...
 uint8_t prev_pwr_seq; //sequence number from last power request.
 unsigned long prev_pwr_seq_action = 0; //last time power button was toggled
 uint16_t prev_pwr_seq_reset_interval = 5000; //follow client sequence nr for 5sec. accept all requests after that.
-//vars for effects. currently only 'move'.
+//vars for Lifx-Z effects. currently only 'move'.
 unsigned long last_move_effect_time;
 uint32_t move_speed;
 uint8_t  move_direction;
 uint16_t move_start_led = 0;
+IPAddress broadcastIp; //Automatically calculated from IP and subnet:
+union lifxEeprom {
+  uint8_t raw[136];
+  struct {
+    char label[LifxBulbLabelLength] = "Arduino LED Strip";  //32 bytes
+    uint8_t location[LifxLocOrGroupSize]; // = guid + label //48 bytes
+    uint8_t group[LifxLocOrGroupSize];    // = guid + label //48 bytes
+    uint64_t grp_loc_updated_at;                            //8  bytes
+  };
+};
+
+lifxEeprom eeprom; 
  
 void setup() {
    //SS for led strip (made with 2N3904 transistor)
   pinMode(SS_LED_STRIP, OUTPUT);
   pinMode(RST_ETHERNET, OUTPUT);
-  digitalWrite (RST_ETHERNET, LOW);
+  digitalWrite(RST_ETHERNET, LOW); //keep low on startup until networik is properly loaded in initNetwork()
+  
   //set up ethernet interrupt (hack for ws5100. Wire soldered on 'LNK' led and connected to digital pin 2).
-  pinMode(NETWORK_INTERRUPT_PIN, INPUT_PULLUP);
-  attachInterrupt(digitalPinToInterrupt(NETWORK_INTERRUPT_PIN), reInitNetwork, CHANGE);
+  #ifdef USE_NETWORK_INTERRUPT_HACK
+    pinMode(NETWORK_INTERRUPT_PIN, INPUT_PULLUP);
+    attachInterrupt(digitalPinToInterrupt(NETWORK_INTERRUPT_PIN), reInitNetwork, CHANGE);
+  #endif
     
   SPI.setClockDivider(SPI_CLOCK_DIV2); //8Mhz SPI bus on UNO. Default is 4Mhz (SPI_CLOCK_DIV4) TODO: use SPI.beginTransaction in LedStreamer.
   Serial.begin(115200);
   while (!Serial) { ; /* wait for serial port to connect. Needed for native USB port only*/ }    
+   //read settings from eeprom (if available)
+  #ifdef USE_EEPROM
+    readEEPROM();
+  #endif
+  //initialize network
   initNetwork();
-  // set up a UDP
-  Udp.begin(LifxPort);
-  //initial light setup.
-  setLight();
-  //check free ram on device.
+  //check free ram on device. (debug)
   #ifdef DEBUG
     freeRam();
   #endif
@@ -119,12 +142,12 @@ void setup() {
 
 void loop() {
   //Network changed?
-  if(_reInitNetwork) {
-    initNetwork();
-    return;
-  }  
-  
-  //reset power sequence. This avoids the leds from flashing.  
+  #ifdef USE_NETWORK_INTERRUPT_HACK
+    if(_reInitNetwork)
+      initNetwork();
+  #endif    
+   
+  //reset power sequence. This avoids the leds from flashing when powering on or off.  
   if(prev_pwr_seq > 0 && millis() - prev_pwr_seq_action >= prev_pwr_seq_reset_interval) {
     prev_pwr_seq = NULL_BYTE;
   }
@@ -140,7 +163,7 @@ void loop() {
     setLight(); //we call the singular functionName because this is a continous stream.  
   }
   
-  // push the data into the LifxPacket structure
+  // push the data into the LifxPacket structure (if a packet is available)
   LifxPacket request;
   // if there's UDP data available, read a packet. (128 bytes max, defined in lifx.h > LifxPacket.data)
   uint8_t packetSize = Udp.parsePacket();
@@ -158,13 +181,14 @@ void loop() {
 }
 
 //Interrupt method (NETWORK_INTERRUPT_PIN)
-void reInitNetwork() {
-   Serial.println(F("- Network Interrupt!"));
-  _reInitNetwork = true;
-}
+#ifdef USE_NETWORK_INTERRUPT_HACK
+  void reInitNetwork() {
+     Serial.println(F("- Network Interrupt!"));
+    _reInitNetwork = true;
+  }
+#endif
 
 void initNetwork() {
-  digitalWrite (SS_LED_STRIP, HIGH);
   digitalWrite (RST_ETHERNET, LOW);
   delay(50);
   digitalWrite (RST_ETHERNET, HIGH);
@@ -174,19 +198,83 @@ void initNetwork() {
     Serial.println(F("Failed to configure Ethernet using DHCP"));
     if (Ethernet.hardwareStatus() == EthernetNoHardware) {     
       Serial.println(F("Ethernet shield was not found.  Sorry, can't run without hardware. :("));
-      // no point in carrying on, so do nothing forevermore:
-      //while (true) { delay(1); }
-      delay(1000);
-      continue;
     } else if(Ethernet.linkStatus() == LinkOFF) {
       Serial.println(F("Ethernet cable is not connected."));
     } 
-  }
-  // print your local IP address:
+     delay(1000);
+  }  
+  /*
+  //Without DHCP: comment the while loop above and uncomment the following lines :  
+  IPAddress ip(192, 168, 0, 254); //asumes a /24 subnet (see doc)
+  Ethernet.begin(mac, ip);
+  */
+  //Calculate broadcast address from IP and subnet.
+  broadcastIp = IPAddress((Ethernet.localIP() & Ethernet.subnetMask()) | ~Ethernet.subnetMask());
+  // print your local IP address and broadcast address:
   Serial.print(F("My IP address: "));
-  Serial.println(Ethernet.localIP());
-  _reInitNetwork = false;
+  Serial.println(Ethernet.localIP());    
+  Serial.print(F("Broadcast address: "));
+  Serial.println(broadcastIp);
+  // set up a UDP Port (56700)
+  Udp.begin(LifxPort);   
+  // blink 3x Green on DHCP success
+  digitalWrite (SS_LED_STRIP, true);
+  for(byte x = 0; x < 3;x++) {
+    strip.setLeds(0,255,0,10,false);  
+    delay(200);
+    strip.setLeds(0,0,0,10,false);  
+    delay(200);
+  }  
+  //(back to previous) light setup.
+  setLight();
+  //reset interrupt flag (if available).
+  #ifdef USE_NETWORK_INTERRUPT_HACK
+    _reInitNetwork = false;
+  #endif  
 }
+
+#ifdef USE_EEPROM
+  void printLocOrGroup(uint8_t data[]){
+    for(byte x = 16; x < LifxLocOrGroupSize;x++)
+      Serial.write(data[x]);  
+  }
+
+  char eeprom_check[] = { 'L','I','F','X' };
+  void readEEPROM() {
+      Serial.println(F("Restoring bulb settings from EEPROM..:"));
+      //read 136 bytes from eeprom and push into eeprom struct. (offset 4)     
+      for(byte x = 0; x < 140; x++) {
+        byte b = EEPROM.read(x);      
+        if(x > 3) //push every byte beyond position 3 in struct
+          eeprom.raw[x-4] = b;
+        else if(b != eeprom_check[x]) { //the first 4 bytes must spell LIFX
+          Serial.println(F("EEPROM does not contain LIFX settings."));
+          break; //if not, exit the loop.
+        }
+      }
+    
+    #ifdef DEBUG
+      Serial.print(F("Label: "));
+      Serial.println(eeprom.label);
+      Serial.print(F("Location: "));
+      printLocOrGroup(eeprom.location);
+      Serial.println();      
+      Serial.print(F("Group: "));
+      printLocOrGroup(eeprom.group);
+      Serial.println();
+    #endif
+  }
+
+  void writeEEPROM() {
+     Serial.print(F("Writing settings to EEPROM..."));
+     for(byte x = 0; x < 4; x++)
+        EEPROM.update(x, eeprom_check[x]);
+     for(byte x = 4; x < 140; x++) {
+        EEPROM.update(x, eeprom.raw[x-4]);
+     }
+     Serial.println(F("Done!"));
+  }
+#endif
 
 void freeRam () {
   extern int __heap_start, *__brkval;
@@ -202,30 +290,30 @@ void handleRequest(LifxPacket &request) {
   response.sequence = request.sequence;
 
   switch(request.type) {
-    case SET_POWER_STATE: {
+    case /* 0x75 (117) */ SET_POWER_STATE: {
       if(request.sequence >= prev_pwr_seq +1) {
         prev_pwr_seq = request.sequence;
         prev_pwr_seq_action = millis();      
-        power_status = word(request.data[1], request.data[0]);
+        power_status = word(request.data[1], request.data[0]); // 0 | 65535
+        //TODO: has a duration.
         setLights();
       }  
     }  
-    case GET_POWER_STATE:{
+    case /* 0x74 (116) */ GET_POWER_STATE:{   
       writeUInt(response.data, 0, power_status);
-      createUdpPacket(response, POWER_STATE, 2); 
+      createUdpPacket(response, POWER_STATE, 2); //0x76 (118)
       break;    
     }
-    case SET_LIGHT_STATE: {//102 (0x66)
+    case /* 0x66 (102) */ SET_LIGHT_STATE: {
       for(i = 0; i < zone_count; i++) {
         memcpy(&zones[i], request.data + 1, 8); 
       }
-    //  zones_active = false;
       setLights();    
     }
-    case GET_LIGHT_STATE: sendLightStateResponse(response); break;   
+    case /* 0x65 (101) */ GET_LIGHT_STATE: sendLightStateResponse(response); break;
     
-    case SET_WAVEFORM:
-    case SET_WAVEFORM_OPTIONAL:{ // 0x77:
+    case /* 0x67 (103) */ SET_WAVEFORM:
+    case /* 0x77 (119) */ SET_WAVEFORM_OPTIONAL:{ 
       WaveFormPacket dataPacket; //todo: we have other things in this packet! (waveform)
       memcpy(dataPacket.raw, request.data, 25);
       for(i = 0; i < zone_count; i++) {
@@ -242,30 +330,26 @@ void handleRequest(LifxPacket &request) {
       sendLightStateResponse(response);
       break;
     }
-    case SET_COLOR_ZONES: {
+    case /* 0x1F5 (501) */ SET_COLOR_ZONES: {
   //    byte apply = request.data[15];  //seems to be buggy?     
       for(i = request.data[0]; i <= request.data[1]; i++) {
         memcpy(&zones[i], request.data + 2,8);         
       }
-     // zones_active = true;
       setLights();
       break; 
     }   
-    case GET_COLOR_ZONES: {
+    case /* 0x1F6 (502) */ GET_COLOR_ZONES: {
       for(uint8_t x = 0; x < zone_count; x+=8) {
         response.data[0] = zone_count;
         response.data[1] = x; //first idx nr for each 8 zones send
         for(i = 0; i < 8; i++) { // i = zoneIdx
-         memcpy(response.data + 2+(i*8),&zones[x+i],8);
-         //if(!zones_active) break;
+          memcpy(response.data + 2+(i*8),&zones[x+i],8);
         }
-        //createUdpPacket(response, zones_active ? STATE_MULTI_ZONE : STATE_ZONE, zones_active ? 66 : 10);
-        createUdpPacket(response, STATE_MULTI_ZONE, 66 );
-        //if(!zones_active) break;
+        createUdpPacket(response, STATE_MULTI_ZONE, 66 ); //506
       }
       break; 
     }
-    case SET_MULTIZONE_EFFECT: {     
+    case /* 0x1FC (508) */ SET_MULTIZONE_EFFECT: {
       byte move_enable = request.data[4];
       if(move_enable) {
         move_direction = request.data[31]; //effect.parameters[1];
@@ -275,45 +359,72 @@ void handleRequest(LifxPacket &request) {
         move_start_led = 0;
       }
     }
-    case GET_MULTIZONE_EFFECT:{
+    case /* 0x1FB (507) */ GET_MULTIZONE_EFFECT:{
       for(i = 0; i < 60; i++) 
         response.data[i] = NULL_BYTE;
       
       response.data[4] = move_speed > 0 ? 1 : 0;
       memcpy(response.data + 7, move_speed, 4);
       response.data[31] = move_direction;
-      createUdpPacket(response, STATE_MULTIZONE_EFFECT, 59); 
+      createUdpPacket(response, STATE_MULTIZONE_EFFECT, 59); //0x1FD (509)
       break;
     }
-    case SET_LOCATION:  memcpy(location, request.data ,LifxLocOrGroupSize);    
-    case GET_LOCATION:  createUdpPacket(response, STATE_LOCATION, location, LifxLocOrGroupSize); break;    
-    case SET_GROUP:     memcpy(group, request.data ,LifxLocOrGroupSize);    
-    case GET_GROUP:     createUdpPacket(response, STATE_GROUP, group, LifxLocOrGroupSize); break;
-    case SET_BULB_LABEL:memcpy(bulbLabel, request.data, LifxBulbLabelLength);  
-    case GET_BULB_LABEL:createUdpPacket(response, BULB_LABEL, bulbLabel, sizeof(bulbLabel)); break;
-    case GET_MESH_FIRMWARE_STATE:     
-    case GET_WIFI_FIRMWARE_STATE: {//0x12 
+    case /* 0x31 (49) */ SET_LOCATION: {
+      memcpy(eeprom.location, request.data ,LifxLocOrGroupSize);
+      memcpy(&eeprom.grp_loc_updated_at, request.data + 48, 8);
+      #ifdef USE_EEPROM
+        writeEEPROM();
+      #endif
+    }
+    case /* 0x30 (48) */ GET_LOCATION: {
+      memcpy(response.data, eeprom.location, LifxLocOrGroupSize);
+      memcpy(response.data+48, &eeprom.grp_loc_updated_at, 8);
+      createUdpPacket(response, STATE_LOCATION, 56); //0x32 (50)
+      break;    
+    }
+    case /* 0x33 (51) */ SET_GROUP: {  
+      memcpy(eeprom.group, request.data ,LifxLocOrGroupSize);
+      memcpy(&eeprom.grp_loc_updated_at, request.data + 48, 8);
+      #ifdef USE_EEPROM
+        writeEEPROM();
+      #endif
+    }
+    case /* 0x34 (52) */ GET_GROUP: {
+      memcpy(response.data, eeprom.group, LifxLocOrGroupSize);      
+      memcpy(response.data+48, &eeprom.grp_loc_updated_at, 8);      
+      createUdpPacket(response, STATE_GROUP, 56); //0x35 (53)
+      break;
+    }    
+    case /* 0x18 (24) */ SET_BULB_LABEL: {
+      memcpy(&eeprom.label, &request.data, LifxBulbLabelLength);
+      #ifdef USE_EEPROM
+        writeEEPROM();
+      #endif
+    }
+    case /* 0x17 (23) */ GET_BULB_LABEL:createUdpPacket(response, BULB_LABEL, eeprom.label, sizeof(eeprom.label)); break; //0x19 RSP 25
+    case /* 0x0e (14) */ GET_MESH_FIRMWARE_STATE:  
+    case /* 0x12 (18) */ GET_WIFI_FIRMWARE_STATE: {
       createUdpPacket(response, 
                       request.type == GET_WIFI_FIRMWARE_STATE ? WIFI_FIRMWARE_STATE : MESH_FIRMWARE_STATE, 
                       FirmwareVersionData, 20);
       break;  
     }        
-    case GET_VERSION_STATE: {
+    case /* 0x20 (32) */ GET_VERSION_STATE: {
       // respond to get command
       writeUInt(response.data,0,LifxBulbVendor);  writeUInt(response.data,2,NULL_BYTE);
       writeUInt(response.data,4,LifxBulbProduct); writeUInt(response.data,6,NULL_BYTE);
       writeUInt(response.data,8,LifxBulbVersion); writeUInt(response.data,10,NULL_BYTE);
-      createUdpPacket(response, VERSION_STATE, 12);
+      createUdpPacket(response, VERSION_STATE, 12); //0x21  (33)
       break;
     }
-    case GET_PAN_GATEWAY: {
+    case /* 0x02 (2) */ GET_PAN_GATEWAY: { 
       response.data[0] = SERVICE_UDP;
       writeUInt(response.data,1,LifxPort);
       writeUInt(response.data,3,NULL_BYTE);
-      createUdpPacket(response, PAN_GATEWAY, 5);    
+      createUdpPacket(response, PAN_GATEWAY, 5);   //0x03 (3)
       break;
     }
-    case GET_WIFI_INFO:{
+    case /* 0x10 (16) */ GET_WIFI_INFO:{
       //write float signal (4bytes)
       writeUInt(response.data,0,0x3F7D); //0.99
       writeUInt(response.data,2,0x70A4); //0.99
@@ -321,10 +432,10 @@ void handleRequest(LifxPacket &request) {
         response.data[i] = NULL_BYTE;      
       //write short mcu_temp (2bytes)
       writeUInt(response.data,12,20);    
-      createUdpPacket(response, STATE_WIFI_INFO, 14);
+      createUdpPacket(response, STATE_WIFI_INFO, 14); // 0x11 (17)
       break;   
     }
-    case 54: {//0x36
+    case /* 0x36  */ 54: {
       //Unknown packet type. It has something to do with the Lifx cloud.Client asks bulb if it is attached to the cloud or not?
       //Responding with packet type 56 and 16 bytes as data stops the broadcast madness...
       for(i=0;i<16;i++)
@@ -340,7 +451,7 @@ void handleRequest(LifxPacket &request) {
 /*************
   DEBUG
 **************/      
-
+    #ifdef DEBUG
     default: {
       if(request.target[0] == mac[0] || request.target[0] == 0) {
         Serial.print(F("-> Unknown packet type, ignoring 0x"));
@@ -351,6 +462,7 @@ void handleRequest(LifxPacket &request) {
       }
       break;
     }
+    #endif
   }
 }
 
@@ -361,7 +473,7 @@ void sendLightStateResponse(LifxPacket &response) {
   uint8_t i = 0;
   // label
   for(i = 0; i < 32; i++) {
-    response.data[12+i] = lowByte(bulbLabel[i]);
+    response.data[12+i] = lowByte(eeprom.label[i]);
   }
   //tags (reserved)
   for(i = 0; i < 8; i++) {
@@ -375,7 +487,7 @@ void writeUInt(uint8_t data[], uint8_t offset, uint16_t value) {
   data[offset+1] = value >> 8;
 }
 
-void createUdpPacket(LifxPacket &response, uint16_t packet_type, uint8_t data[], uint8_t data_size) {      
+void createUdpPacket(LifxPacket &response, uint16_t packet_type, uint8_t data[], uint8_t data_size) {
   memcpy(response.data, data, data_size); //todo, is this necessary???
   createUdpPacket(response, packet_type, data_size);
 }
@@ -394,23 +506,22 @@ void createUdpPacket(LifxPacket &response, uint16_t packet_type, uint8_t data_si
   sendUDPPacket(response);    
 }
 
-void sendUDPPacket(LifxPacket &pkt) { 
-  // broadcast packet on local subnet
-  IPAddress remote_addr(Udp.remoteIP());
-  IPAddress broadcast_addr(remote_addr[0], remote_addr[1], remote_addr[2], 255); //assumes a /24 network. (todo, get subnet from dhcp.)
-
+//TODO: add ip/port param for broadcast or unicast data. (or split function)
+//TODO2: send state packets as broadcasts at certain intervals (like real bulbs do)
+void sendUDPPacket(LifxPacket &pkt) {   
   #ifdef DEBUG
-    Serial.print(F("OUT "));
+    Serial.print(F("OUT "));       
     printLifxPacket(pkt);
   #endif
-
-  Udp.beginPacket(broadcast_addr, Udp.remotePort());
+  //send as UNICAST data back to client.
+  Udp.beginPacket(Udp.remoteIP(), Udp.remotePort());
+ // Udp.beginPacket(broadcastIp, LifxPort); //BROADCASTS (test sync to multiple clients)
   for(uint8_t x = 0; x < pkt.size; x++) Udp.write(pkt.raw[x]);
   Udp.endPacket();
 }
 
 void setLights() {
-  //called twice. This forces the internal LED buffer to show the values onto the LED. (only for LED Strips with APA102 drivers)
+  //called twice. This forces the internal LED buffer to show the values onto the LED strip. (only for LED Strips with APA102 drivers)
   //You should only call it once if you have a continuous stream of changing leds.
   setLight(); setLight(); 
 }
@@ -440,22 +551,22 @@ void selectSpiLedStrip(byte enable) {
 }
 
 void writeToStrip(HSBK color, uint16_t leds_count) {
-      uint16_t this_hue = map(color.hue, 0, 65535, 0, 360);
-      uint8_t this_sat = map(color.sat, 0, 65535, 0, 255);
-      uint8_t this_bri = map(color.bri, 0, 65535, 0, 255);
-      // if we are setting a "white" colour (kelvin temp)
-      if(color.kel > 0 && this_sat < 1) {
-        // convert kelvin to RGB
-        rgb kelvin_rgb = kelvinToRGB(color.kel);
-        // convert the RGB into HSV
-        hsv kelvin_hsv = rgb2hsv(kelvin_rgb);
-        // set the new values ready to go to the bulb (brightness does not change, just hue and saturation)
-        this_hue = kelvin_hsv.h;
-        this_sat = map(kelvin_hsv.s*1000, 0, 1000, 0, 255); //multiply the sat by 1000 so we can map the percentage value returned by rgb2hsv
-      }
-      uint8_t rgb[] ={0,0,0};
-      hsb2rgb(this_hue, this_sat, this_bri, rgb);     
-      strip.setNextLeds(rgb[0],rgb[1],rgb[2], constrain(color.bri,0,31), leds_count);
+  uint16_t this_hue = map(color.hue, 0, 65535, 0, 360);
+  uint8_t this_sat = map(color.sat, 0, 65535, 0, 255);
+  uint8_t this_bri = map(color.bri, 0, 65535, 0, 255);
+  // if we are setting a "white" colour (kelvin temp)
+  if(color.kel > 0 && this_sat < 1) {
+    // convert kelvin to RGB
+    rgb kelvin_rgb = kelvinToRGB(color.kel);
+    // convert the RGB into HSV
+    hsv kelvin_hsv = rgb2hsv(kelvin_rgb);
+    // set the new values ready to go to the bulb (brightness does not change, just hue and saturation)
+    this_hue = kelvin_hsv.h;
+    this_sat = map(kelvin_hsv.s*1000, 0, 1000, 0, 255); //multiply the sat by 1000 so we can map the percentage value returned by rgb2hsv
+  }
+  uint8_t rgb[] ={0,0,0};
+  hsb2rgb(this_hue, this_sat, this_bri, rgb);     
+  strip.setNextLeds(rgb[0],rgb[1],rgb[2], constrain(color.bri,0,31), leds_count);
 }
 
 /*
@@ -479,7 +590,12 @@ void hsb2rgb(uint16_t hue, uint8_t sat, uint8_t val, uint8_t rgb[]) {
 
 void printLifxPacket(LifxPacket &request) {
     uint8_t i = 0;
-    Serial.print(F("LFX2: Size:"));
+
+    Serial.print(Udp.remoteIP()); //todo: broadcast or unicast...
+    Serial.print(F(":"));    
+    Serial.print(Udp.remotePort()); //todo: will change when implementing decent broadcasts
+    
+    Serial.print(F(" Size:"));
     Serial.print(request.size);
     
 //    Serial.print(F(" | Proto: "));
