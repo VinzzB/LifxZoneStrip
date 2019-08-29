@@ -9,9 +9,11 @@
 //  byte year;
 //}
 
-
+//Packetsizes.
 const uint8_t LifxPacketSize      = 36;
 const uint8_t LifxMaximumPacketSize = 128;
+const uint8_t LifxBulbLabelLength = 32;
+const uint8_t LifxLocOrGroupSize  = 48; // 56;
 
 union LifxPacket {
   uint8_t raw[];
@@ -35,7 +37,6 @@ union LifxPacket {
     uint16_t type;          //2 bytes | 34 bytes
     uint16_t reserved4;     //2 bytes | 36 bytes
     /* DATA */
-    //byte data[LifxMaximumPacketSize-LifxPacketSize]; // * leftover bytes
     uint16_t data_size;  //2bytes  (NOT included in responses!) 
   };
 };
@@ -67,22 +68,17 @@ union WaveFormPacket {
   };
 };
 
-//struct MultiZoneEffectPacket {
-//    uint32_t intanceId;
-//    uint8_t type;
-//    uint16_t reserved1;
-//    uint32_t speed;
-//    uint64_t duration;
-//    uint32_t reserved2;
-//    uint32_t reserved3;
-//    uint32_t parameters[8] ;
-//};
+union lifxEeprom {
+  uint8_t raw[136];
+  struct {
+    char label[LifxBulbLabelLength] = "Arduino LED Strip";  //32 bytes
+    uint8_t location[LifxLocOrGroupSize]; // = guid + label //48 bytes
+    uint8_t group[LifxLocOrGroupSize];    // = guid + label //48 bytes
+    uint64_t grp_loc_updated_at;                            //8  bytes
+  };
+};
 
-const uint16_t LifxPort            = 56700;  // local port to listen on
-const uint8_t  LifxBulbLabelLength = 32;
-//const uint8_t  LifxBulbTagsLength  = 8;
-const uint8_t  LifxLocOrGroupSize  = 48; // 56;
-
+const uint16_t LifxPort = 56700;  // local port to listen on
 // firmware versions, etc
 //https://github.com/LIFX/products/blob/master/products.json
 const uint16_t LifxBulbVendor = 1;
@@ -118,12 +114,9 @@ const uint8_t STATE_WIFI_INFO = 0x11;        //RSP 17
 const uint8_t GET_WIFI_FIRMWARE_STATE = 0x12;  //REQ 18 GetWifiFirmware 
 const uint8_t WIFI_FIRMWARE_STATE = 0x13;		  //RSP 19 StateWifiFirmware 
 
-//const uint8_t GET_POWER_STATE = 0x14;	        //REQ 20  GetPower 
-//const uint8_t SET_POWER = 0x15               //REQ 21  SetPower 
 const uint8_t GET_POWER_STATE = 0x74;          //REQ 116  GetPower 
 const uint8_t SET_POWER_STATE = 0x75;	        //REQ 117 SetPower 
 const uint8_t POWER_STATE = 0x76;               //RSP 118  StatePower 
-//const uint8_t POWER_STATE = 0x16; 			        //RSP 22  StatePower 
 
 const uint8_t GET_BULB_LABEL = 0x17; 		      //REQ 23 GetLabel 
 const uint8_t SET_BULB_LABEL = 0x18; 		      //REQ 24 SetLabel 
@@ -188,10 +181,3 @@ const uint16_t STATE_EXTENDED_COLOR_ZONES = 512;
 //const uint16_t STATE_TILE_STATE_64 = 711;
 //const uint16_t SET_TILE_STATE_64 = 715;
 //
-//#define EEPROM_BULB_LABEL_START 0 // 32 bytes long
-//#define EEPROM_BULB_TAGS_START 32 // 8 bytes long
-//#define EEPROM_BULB_TAG_LABELS_START 40 // 32 bytes long
-// future data for EEPROM will start at 72...
-
-//#define EEPROM_CONFIG "AL1" // 3 byte identifier for this sketch's EEPROM settings
-//#define EEPROM_CONFIG_START 253 // store EEPROM_CONFIG at the end of EEPROM

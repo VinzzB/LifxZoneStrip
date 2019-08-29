@@ -38,16 +38,20 @@ ETH_INT = Ethernet interrupt (optional)
 
 */
 // TODO: 
-// - Waveforms, skew ratio, cycles, periods, transient effects. (see: https://github.com/tigoe/ArduinoLifx)
+// - Waveforms, skew ratio, cycles, periods, transient effects.
 // - use SPI.beginTransaction in APA102_LedStreamer. (currently using the clockDivider option.)
 
 /*-------------------
-//LOAD OR INCLUDE FUNCTIONALITY
+// ENABLE / DISABLE FUNCTIONALITY
 //------------------- */
-#define USE_NETWORK_INTERRUPT_HACK //uncomment this line if have a ws5100 network chip with a wire hack.
+#define USE_NETWORK_INTERRUPT_HACK //uncomment this line if you have a ws5100 network chip with a wire hack. (or a w5200/w5500)
 #define USE_EEPROM //uncomment this line if you are using an arduino with EEPROM support and you want to save the Label, location and group in non volatile memory.
+#define USE_DHCP //comment this line if you want to use a static IP. enter IP in config on line 69.
 #define DEBUG
 
+/*-------------------
+// INCLUDE LIBS
+//------------------- */
 #include <SPI.h>
 #include <Ethernet.h>
 #include <APA102_LedStreamer.h>
@@ -60,55 +64,45 @@ ETH_INT = Ethernet interrupt (optional)
 /*-------------------
 // CONFIG  (replace settings if needed)
 //------------------- */
-
-//Set the amount of leds on the strip 
-#define LEDS 300 //0-65535
-#define LABEL "Arduino LED Strip"
 #define SS_ETHERNET 10
 #define RST_ETHERNET 9
 #define SS_LED_STRIP 3
 #define NETWORK_INTERRUPT_PIN 2 //wire soldered onto ethernet ws5100 LNK led.(optional)
-
+IPAddress ip = IPAddress(192,168,0,254); //Used when dhcp is disabled (see USE_DHCP above). Subnet defaults to 255.255.255.0 (see line 190)
 const uint8_t mac[] = { 0x00, 0xAA, 0xBB, 0xCC, 0xDE, 0x02 };
-// setup zones
-const uint8_t zone_count = 16; //only powers of 8! max 80 zones (by doc). each zone will hold 9bytes in SRam! (1byte for led_zones and 8 bytes for HSBK)
-//Define the amount of leds per zone.
-//use byte array if every zone has less than 255 leds (=9bytes/zone). Use an unsigned integer array for more (>255) leds per zone (=10bytes per zone).
-const uint8_t led_zones[] = { 18, 19, 18, 20, 18, 19, 18, 20, 18 ,19, 18, 20, 18, 19, 18, 20}; 
+//Setup zones
+//zone_count: only powers of 8! max 80 zones (by doc). each zone will hold 9bytes in SRam! (1byte for led_zones and 8 bytes for HSBK)
+//leds_per_zones: Define the amount of leds per zone. 
+//Use byte array if every zone has less than 255 leds (=9bytes/zone). Use uint16_t for more than 255 leds per zone (=10bytes per zone).
+const uint8_t zone_count = 16; 
+const uint8_t leds_per_zones[zone_count] = { 18, 19, 18, 20, 18, 19, 18, 20, 18 ,19, 18, 20, 18, 19, 18, 20}; 
 
 /*-------------------
 // GLOBAL VARS  (do not change, unless you know what you're doing!)
 //------------------- */
+lifxEeprom eeprom; //holds vars for label, location, group.
 EthernetUDP Udp;
-APA102_LedStreamer strip = APA102_LedStreamer(LEDS); 
-//allocate memory for zones.
+APA102_LedStreamer strip = APA102_LedStreamer(0); //temp workaround. TODO: add emtpty CTOR and public Led setter in ledstreamer class.
 HSBK zones[zone_count];
+uint16_t led_count;
 uint16_t power_status = 0; //0 | 65535
+uint8_t site_mac[] = { 0x4c, 0x49, 0x46, 0x58, 0x56, 0x32 }; // spells out "LIFXV2" - version 2 of the app changes the site address to this...
 #ifdef USE_NETWORK_INTERRUPT_HACK
   volatile bool _reInitNetwork = true; //flag set by interrupt when ethernet connection is lost or reconnected.
 #endif
-uint8_t site_mac[] = { 0x4c, 0x49, 0x46, 0x58, 0x56, 0x32 }; // spells out "LIFXV2" - version 2 of the app changes the site address to this...
-
 //vars for Lifx-Z effects. currently only 'move'.
 unsigned long last_move_effect_time;
 uint32_t move_speed;
 uint8_t  move_direction;
 uint16_t move_start_led = 0;
-IPAddress broadcastIp; //Automatically calculated from IP and subnet:
+//IPAddress broadcastIp; //Automatically calculated from IP and subnet:
 
-union lifxEeprom {
-  uint8_t raw[136];
-  struct {
-    char label[LifxBulbLabelLength] = LABEL;  //32 bytes
-    uint8_t location[LifxLocOrGroupSize]; // = guid + label //48 bytes
-    uint8_t group[LifxLocOrGroupSize];    // = guid + label //48 bytes
-    uint64_t grp_loc_updated_at;                            //8  bytes
-  };
-};
-
-lifxEeprom eeprom; 
- 
-void setup() {
+void setup() {   
+  
+  //count all leds in zones for easy use later on..
+  for(uint8_t i = 0; i < zone_count; led_count += leds_per_zones[i++]){;} 
+  strip = APA102_LedStreamer(led_count);
+  
    //SS for led strip (made with 2N3904 transistor)
   pinMode(SS_LED_STRIP, OUTPUT);
   pinMode(RST_ETHERNET, OUTPUT);
@@ -145,13 +139,13 @@ void loop() {
   //--------------------
   // Animations: move colors left or right (MOVE Effect for Z strips and Beam)
   //--------------------
-  if(move_speed > 0 && power_status > 0 && millis() - last_move_effect_time >= (move_speed / LEDS )) {
+  if(move_speed > 0 && power_status > 0 && millis() - last_move_effect_time >= (move_speed / led_count )) {
     last_move_effect_time = millis();
 
-    if(move_direction && move_start_led++ == LEDS - 1)
+    if(move_direction && move_start_led++ == led_count - 1)
       move_start_led = 0;
     else if(!move_direction && move_start_led-- == 0)
-      move_start_led = LEDS - 1;
+      move_start_led = led_count - 1;
     setLight(); //we call the singular functionName because this is a continous stream.  
   }
   
@@ -159,7 +153,7 @@ void loop() {
   //Handle network data.
   //--------------------
   LifxPacket request;
-  // if there's UDP data available, read a packet.
+  // if there's UDP data available, read the packet.
   uint16_t packetSize = Udp.parsePacket();
   if(packetSize >= LifxPacketSize) {
     //read first 36 bytes. 
@@ -183,21 +177,20 @@ void initNetwork() {
   delay(50);
   digitalWrite (RST_ETHERNET, HIGH);
   // start the Ethernet connection:
-  Serial.println(F("Initialize Ethernet with DHCP:"));
-  while (Ethernet.begin(mac) == 0) {
-    Serial.println(F("Failed to configure Ethernet using DHCP"));
-    if (Ethernet.hardwareStatus() == EthernetNoHardware) {     
-      Serial.println(F("Ethernet shield was not found.  Sorry, can't run without hardware. :("));
-    } else if(Ethernet.linkStatus() == LinkOFF) {
-      Serial.println(F("Ethernet cable is not connected."));
-    } 
-     delay(1000);
-  }  
-  /*
-  //Without DHCP: comment the while loop above and uncomment the following lines :  
-  IPAddress ip(192, 168, 0, 254); 
-  Ethernet.begin(mac, ip); //asumes a /24 subnet (see doc for more options)
-  */
+  #ifdef USE_DHCP
+    Serial.println(F("Initialize Ethernet with DHCP:"));
+    while (Ethernet.begin(mac) == 0) {
+      Serial.println(F("Failed to configure Ethernet using DHCP"));
+      if (Ethernet.hardwareStatus() == EthernetNoHardware) {     
+        Serial.println(F("Ethernet shield was not found.  Sorry, can't run without hardware. :("));
+      } else if(Ethernet.linkStatus() == LinkOFF) {
+        Serial.println(F("Ethernet cable is not connected."));
+      } 
+       delay(1000);
+    }  
+  #else /* static IP */
+    Ethernet.begin(mac, ip); //asumes a /24 subnet (more info on https://www.arduino.cc/en/Reference/EthernetBegin)
+  #endif
   
   // Calculate broadcast address from IP and subnet.
   // broadcastIp = IPAddress((Ethernet.localIP() & Ethernet.subnetMask()) | ~Ethernet.subnetMask());
@@ -209,7 +202,7 @@ void initNetwork() {
   Udp.begin(LifxPort);   
   // blink 3x Green on DHCP success
   digitalWrite (SS_LED_STRIP, true);
-  for(byte x = 0; x < 6;x++) {
+  for(uint8_t x = 0; x < 6;x++) {
     strip.setLeds(0, x % 2 ? 255 : 0, 0, 10, false);      
     delay(200);
   }    
@@ -222,7 +215,7 @@ void initNetwork() {
 
 #ifdef USE_EEPROM
   void printLocOrGroup(uint8_t data[]){
-    for(byte x = 16; x < LifxLocOrGroupSize;x++)
+    for(uint8_t x = 16; x < LifxLocOrGroupSize;x++)
       Serial.write(data[x]);  
   }
 
@@ -230,8 +223,8 @@ void initNetwork() {
   void readEEPROM() {
       Serial.println(F("Restoring bulb settings from EEPROM..:"));
       //read 136 bytes from eeprom and push into eeprom struct. (offset 4)     
-      for(byte x = 0; x < 140; x++) {
-        byte b = EEPROM.read(x);      
+      for(uint8_t x = 0; x < 140; x++) {
+        uint8_t b = EEPROM.read(x);      
         if(x > 3) //push every byte beyond position 3 in struct
           eeprom.raw[x-4] = b;
         else if(b != eeprom_check[x]) { //the first 4 bytes must spell LIFX
@@ -254,9 +247,9 @@ void initNetwork() {
 
   void writeEEPROM() {
      Serial.print(F("Writing settings to EEPROM..."));
-     for(byte x = 0; x < 4; x++)
+     for(uint8_t x = 0; x < 4; x++)
         EEPROM.update(x, eeprom_check[x]);
-     for(byte x = 4; x < 140; x++) {
+     for(uint8_t x = 4; x < 140; x++) {
         EEPROM.update(x, eeprom.raw[x-4]);
      }
      Serial.println(F("Done!"));
@@ -278,7 +271,7 @@ void handleRequest(LifxPacket &request) {
   //get lifx payload.
   uint8_t reqData[ request.type == SET_EXTENDED_COLOR_ZONES ? 8 : request.data_size ];          
   Udp.read(reqData, request.type == SET_EXTENDED_COLOR_ZONES ? 8 : request.data_size);
-  byte responseData[LifxMaximumPacketSize-LifxPacketSize]; //Lifx Payload for response
+  uint8_t responseData[LifxMaximumPacketSize-LifxPacketSize]; //Lifx Payload for response
   #ifdef DEBUG
     Serial.print("IN ");
     printLifxPacket(request, reqData);
@@ -341,7 +334,7 @@ void handleRequest(LifxPacket &request) {
       break; 
     }
     case /* 0x1FC (508) */ SET_MULTIZONE_EFFECT: {
-      byte move_enable = reqData[4];
+      uint8_t move_enable = reqData[4];
       if(move_enable) {
         move_direction = reqData[31]; //effect.parameters[1];
         memcpy(&move_speed,reqData + 7,4);       
@@ -538,15 +531,15 @@ void setLights() {
 void setLight() {
   selectSpiLedStrip(true);
   if(power_status) {
-    byte currentZoneIdx = 0;
-    uint16_t startZoneLed = led_zones[0];
-    for(startZoneLed; startZoneLed < move_start_led; startZoneLed += led_zones[++currentZoneIdx]) {/*EMPTY*/}
+    uint8_t currentZoneIdx = 0;
+    uint16_t startZoneLed = leds_per_zones[0];
+    for(startZoneLed; startZoneLed < move_start_led; startZoneLed += leds_per_zones[++currentZoneIdx]) {/*EMPTY*/}
     startZoneLed -=  move_start_led;
     for(uint8_t zoneIdx = currentZoneIdx; zoneIdx < zone_count; zoneIdx++) {
-      writeToStrip(zones[zoneIdx], zoneIdx == currentZoneIdx ? startZoneLed : led_zones[zoneIdx]);
+      writeToStrip(zones[zoneIdx], zoneIdx == currentZoneIdx ? startZoneLed : leds_per_zones[zoneIdx]);
     }
     for(uint8_t zoneIdx = 0; zoneIdx <= currentZoneIdx; zoneIdx++) {
-      writeToStrip(zones[zoneIdx], led_zones[zoneIdx] - (zoneIdx == currentZoneIdx ? startZoneLed : 0));
+      writeToStrip(zones[zoneIdx], leds_per_zones[zoneIdx] - (zoneIdx == currentZoneIdx ? startZoneLed : 0));
     }
   } else {   
     strip.setLeds(0,0,0,0,false);   
