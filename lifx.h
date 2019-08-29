@@ -35,8 +35,8 @@ union LifxPacket {
     uint16_t type;          //2 bytes | 34 bytes
     uint16_t reserved4;     //2 bytes | 36 bytes
     /* DATA */
-    byte data[LifxMaximumPacketSize-LifxPacketSize]; // * leftover bytes
-    byte data_size;    
+    //byte data[LifxMaximumPacketSize-LifxPacketSize]; // * leftover bytes
+    uint16_t data_size;  //2bytes  (NOT included in responses!) 
   };
 };
 
@@ -89,7 +89,7 @@ const uint16_t LifxBulbVendor = 1;
 const uint16_t LifxBulbProduct = 32; //31 and 32 are both Lifx Z
 const uint16_t LifxBulbVersion = 1;
 const uint16_t LifxFirmwareVersionMajor = 2;
-const uint16_t LifxFirmwareVersionMinor = 76;  //smaller than 77 = version 1 | higher or equal to 77 = version 2.
+const uint16_t LifxFirmwareVersionMinor = 77;  //smaller than 77 = version 1 | higher or equal to 77 = version 2.
 uint8_t FirmwareVersionData[] = { 
   0x44, 0x65, 0x73, 0x69, 0x67, 0x6e, 0x20, 0x62, //build timestamp
   0x79, 0x20, 0x56, 0x69, 0x6e, 0x7a, 0x7a, 0x42, //install timestamp
@@ -175,9 +175,9 @@ const uint16_t STATE_MULTIZONE_EFFECT = 509;     //RSP 0x1FD
 
 //multi-zone messages (extended multizone >=v2.77)
 
-//const uint16_t SET_EXTENDED_COLOR_ZONES = 510;
-//const uint16_t GET_EXTENDED_COLOR_ZONES = 511;
-//const uint16_t STATE_EXTENDED_COLOR_ZONES = 512;
+const uint16_t SET_EXTENDED_COLOR_ZONES = 510;
+const uint16_t GET_EXTENDED_COLOR_ZONES = 511;
+const uint16_t STATE_EXTENDED_COLOR_ZONES = 512;
 
 //TILE MESSAGES
 //
